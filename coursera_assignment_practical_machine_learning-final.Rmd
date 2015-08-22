@@ -1,0 +1,268 @@
+---
+title: "Coursera Assignment: A Prediction Model for Weightlifting Exercises"
+author: ""
+date: "Thursday, August 13, 2015"
+output: html_document
+---
+
+###Preamble
+
+The following documents an analysis of data from the "Weight Lifting Exercise Dataset"
+and the creation of a model to predict the quality of a new "lift" - i.e. the class of the manner in which the movement was done (recorded  by a factor variable in the dataset)
+
+The dataset was provided here :  (http://groupware.les.inf.puc-rio.br/har)
+
+The accuracy of the model was assessed using cross-validation and the out-of-sample error computed.
+
+###The Approach
+
+The apporach taken was as follows:
+
+- Load and clean the training dataset  
+
+- Examine the features for issues such as relative impact on the outcome and correlation with a view to reducing the features set as much as possible.  Further reduction of features using Principal Component Analysis (PCA).  
+
+- Test different models with algorithms appropriate for categorical outcomes.  K-Fold Cross-Validation was used - with the help of the Caret package. Choose the most accurate and build the model.
+
+- Load the final testing data, transform into relevant principal components and apply the built model to generate the required predictions.
+
+- Measurement of the Accuracy of the final Model
+
+
+
+
+
+###Data Retrieval & Cleaning
+
+The train and test datasets were provided in separate files.  The training dataset was read in with options to identify and convert NA and #Div/0!
+strings.
+
+```{r,echo=TRUE,warning=FALSE}
+library(caret)
+set.seed(100)
+training <- read.csv("pml-training.csv", header=TRUE, na.strings = c("NA","#DIV/0!"))
+
+```
+
+
+Given the size of the training set (160 variables and 19,600 observations) the data was examined thoroughly with a view to removal of as much extraneous data as possible in order to reduce the set and improve the performance of the model.
+```{r,echo=TRUE}
+#Finding total NA's in each column    
+na.cols <- apply(training,2,function(x) sum(is.na(x)))
+
+#Identifying columns with Na's
+wna <- which(na.cols != 0)
+na.tbl <- na.cols[wna]
+
+```
+
+A look at the columns with NA's reveal that they are essentially the summary statistics variables and are almost entirely populated with NA's (minimum 98%)
+
+```{r,echo=TRUE}
+    min(na.tbl)/dim(training)[1]
+
+```
+
+We can therefore remove these columns
+
+```{r,echo=TRUE}
+train.orig <- training
+training <- training[,-wna]
+
+```
+
+###Feature Selection
+
+(*NB Some steps may seem superflouous given the many iterations and changes to the code)  
+
+We can also remove the columns obviously having little relevance to the outcome such as row names, timestamps, window stamps and usernames. (Confer Discussion forum and Weightlifting website :[http://groupware.les.inf.puc-rio.br/har]
+[http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201
+])
+
+```{r,echo=TRUE}
+training <- training[,-c(1:7)]
+
+#Checking for near zero variation features & removing
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+print(nsv)
+```
+Nothing to remove.  
+
+Exploring the training set further
+
+```{r,echo=TRUE}
+#Easier handling of column names
+cn <- colnames(training)
+
+#Create table with colum names and class of each.
+cn.class <- lapply(training, class)
+cn.class <- as.character(cn.class)
+cn.tbl <- data.frame(cn,cn.class)
+print(cn.tbl)
+
+#Generating correlation matrix (excluding the factor variables)
+cn.fac <- which(cn.tbl[,2]=="factor")
+corMat <- cor(training[,-c(cn.fac)])
+
+
+#Finding Highly correlated variables and using caret function to decide #the ones to discard
+
+out <- findCorrelation(corMat, cutoff=0.80)
+
+#Reducing training set to fianl features be used
+training <- training[,-c(out)]
+
+```
+###Model Creation and Testing
+
+First, the data is split in to training and testing sets
+
+```{r,echo=TRUE}
+inTrain <- createDataPartition(y=training$classe,p=0.75, list=FALSE)
+trn <- training[inTrain,]
+tst <- training[-inTrain,]
+```
+
+The following 3 Models will be evaluated given that they're very popular for use in classifiers:  
+- Linear Discriminate Analysis (lda)  
+- Random Forest (rf)  
+- Gradient Boosting (gbm)  
+
+*NB.  The code shown immediately below worked well with one of the models but had serious performance issues with the other two - given the limitations of my system. The dataset was therefore split into more manageable (10) pieces, and the 3 models tested on these.  The code below was therefore commented out, and the code used on the subsets included in the appendix.
+
+_Testing Linear Discriminant Analysis:_
+
+```{r,echo=TRUE}
+#tc <- trainControl(method="cv",number=10)
+#system.time(modelFit.lda <- train(trn$classe~.,trControl=tc, method="lda", data=trn))
+
+# cm.lda <- confusionMatrix(trn$classe,predict(modelFit.lda,trn[,-41]))
+
+```
+
+_Testing Random Forest:_
+
+```{r,echo=TRUE}
+# tc <- trainControl(method="cv",number=10)
+# system.time(modelFit.rf <- train(trn$classe~.,trControl=tc, method="rf", data=trn))
+# 
+# cm.rf <- confusionMatrix(trn$classe,predict(modelFit.rf,trn[,-41]))
+# cm.rf$overall["Accuracy"]
+
+```
+
+_Testing Gradient Boosting:_
+
+```{r,echo=TRUE}
+# tc <- trainControl(method="cv",number=10)
+# system.time(modelFit.gbm <- train(trn$classe~.,trControl=tc, method="gbm", data=trn))
+# 
+# cm.gbm <- confusionMatrix(trn$classe,predict(modelFit.gbm,trn[,-41]))
+# cm.gbm$overall["Accuracy"]
+
+```
+
+The Random Forest  model gave the highest overall accuracy and was the chosen algorithm for the model.
+
+We then preprocess the training data to further reduce the variables using Principal Component Analysis (PCA).  A threshold of 95% was used.
+
+```{r,echo=TRUE}
+#Creating Principal Components - omitting the outcome variable
+probj <- preProcess(trn[,-41],method="pca",thresh=0.95)
+trnPC <- predict(probj,trn[,-41])
+dim(trnPC)
+```
+
+The number of features have been reduced to 24.  
+We now build the model with these features.
+
+```{r,echo=TRUE}
+#Creating the random forest model , and timing it.
+system.time(fit <- train(trn$classe~.,method="rf",data=trnPC))
+
+#fit <- readRDS("fit.Rds") #This line was used to save time during the #trial & error process.  The line above commented out.
+
+```
+
+We also have to transform the testing set to principal components using the same PCA object used for the training set.
+
+```{r,echo=TRUE}
+#Creating Principal Components for the test set - omitting the outcome #variable
+tstPC <- predict(probj,tst[,-41])
+```
+
+Tesing the Model
+
+```{r,echo=TRUE,warning=FALSE}
+#Comparing Predictions with Outcomes in test set using a Confusion Matrix
+cm <- confusionMatrix(tst$classe, predict(fit,tstPC))
+
+#Printing Accuracy
+cm$overall["Accuracy"]
+
+```
+The Out-of-Sample Test Accuracy is `r cm$overall["Accuracy"]`
+
+
+###Predicting Test Dataset Outcomes
+
+Having built and tested the model on the training dataset, we now apply the model to the final test set __"pml-testing.csv"__.  
+
+We first have to transform that test set to resemble the dataset used in creating our model.  
+
+So we create our transformed final test set by first reducing the features to those included in the final training set.
+
+```{r,echo=TRUE}
+#Reading Final Test Dataset
+test.final <- read.csv("pml-testing.csv", header=TRUE, na.strings = c("NA","#DIV/0!"))
+
+#Reducing features to that of final training set
+col.idx <- colnames(train.orig) %in% colnames(training)
+test.final <- test.final[col.idx]
+
+```
+
+We then transform the variables into principal components using the same preProcessed object used on the training set.
+
+```{r,echo=TRUE}
+test.final.PC <- predict(probj,test.final[,-41])
+
+```
+
+Then running the prediction.
+```{r,echo=TRUE}
+pred.final <- predict(fit,test.final.PC)
+print(pred.final)
+```
+
+###APPENDIX  
+
+The following is the code to test the models
+
+```{r,echo=TRUE}
+#Break the dataset into more manageable sizes: Ten samples (s1:s10)
+
+# f <- createFolds(training$classe,k=10)
+# for (i in 1:10){assign(paste0("s",i), training[f[[i]],])}
+
+# Samples s3 and s5 chosen at random for each test
+# tc <- trainControl(method="cv",number=10)
+# system.time(fit3.rf <- train(s3$classe~.,trControl=tc, method="rf", data=s3))
+# system.time(fit5.rf <- train(s5$classe~.,trControl=tc, method="rf", data=s5))
+# 
+# system.time(fit3.gbm <- train(s3$classe~.,trControl=tc, method="gbm", data=s3))
+# system.time(fit5.gbm <- train(s5$classe~., trControl=tc,method="gbm", data=s5))
+# 
+# system.time(fit3.lda <- train(s3$classe~.,trControl=tc, method="lda", data=s3))
+# system.time(fit5.lda <- train(s5$classe~.,trControl=tc, method="lda", data=s5))
+
+# cm3.gbm <- confusionMatrix(trn$classe,predict(fit3.gbm,trn[,-41]))
+# cm3.gbm$overall["Accuracy"]
+# cm5.gbm <- confusionMatrix(trn$classe,predict(fit3.gbm,trn[,-41]))
+# cm3.gbm$overall["Accuracy"]
+
+
+```
+
+
+
